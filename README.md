@@ -43,8 +43,10 @@ source /opt/oss-cad-suite/environment
 ## Build the IP
 
 ```sh
-uv run simple-soc --output-dir build/virtual
+make generate          # == uv run simple-soc --output-dir build/virtual
 ```
+
+(Equivalent manual command: `uv run simple-soc --output-dir build/virtual`)
 
 Outputs:
 
@@ -113,7 +115,15 @@ endmodule
 ## Verification
 
 ```sh
-# 1. Lint (benign generated-code warning classes suppressed)
+make lint       # 1. Verilator lint-only pass (benign generated-code warnings suppressed)
+make simulate   # 2. Verilator-compile + run the black-box C++ harness -> "VERILATOR TB: PASS (4000 cycles)"
+make clean      # remove all build artifacts
+```
+
+(Equivalent manual commands:)
+
+```sh
+# 1. Lint
 verilator --lint-only -Wno-fatal -Wno-COMBDLY -Wno-WIDTHEXPAND \
           -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
           --top-module soc build/virtual/gateware/soc.v
@@ -122,8 +132,10 @@ verilator --lint-only -Wno-fatal -Wno-COMBDLY -Wno-WIDTHEXPAND \
 verilator --cc --exe --timing -Wall -Wno-fatal --top-module soc \
           -Mdir build/verilator build/virtual/gateware/soc.v test/tb_soc.cpp
 make -C build/verilator -f Vsoc.mk
-./build/verilator/Vsoc        # -> "VERILATOR TB: PASS (4000 cycles)"
+./build/verilator/Vsoc
+```
 
+```sh
 # 3. Optional: Yosys elaboration/structural smoke test
 yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; \
           proc; opt; check"  # -> "Found and reported 0 problems."
