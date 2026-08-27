@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# LiteX-generated SRAM/ROM init dumps
+*.init
+
 # Virtual environments
 .venv

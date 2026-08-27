@@ -1,10 +1,10 @@
 [project]
-name = "codespaces-blank"
+name = "litex-wb-litescope"
 version = "0.1.0"
-description = "Add your description here"
+description = "LiteX Wishbone-bus SoC with UARTBone + LiteScope ILA, built as a standalone single-file Verilog IP core"
 readme = "README.md"
 authors = [
-    { name = "Mike", email = "super.mvk@yandex.ru" }
+    { name = "Mike", email = "m.kuskov@innopolis.university" }
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -94,7 +94,8 @@ pythondata-cpu-vexriscv         = { git = "https://github.com/litex-hub/pythonda
 pythondata-cpu-vexriscv-smp     = { git = "https://github.com/litex-hub/pythondata-cpu-vexriscv-smp/",        tag = "2026.04" }
 
 [project.scripts]
-codespaces-blank = "codespaces_blank:main"
+litex-wb-litescope = "litex_wb_litescope:main"
+simple-soc         = "litex_wb_litescope.build_soc:main"
 
 [build-system]
 requires = ["uv_build>=0.12.6,<0.13.0"]
