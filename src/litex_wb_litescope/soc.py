@@ -11,13 +11,17 @@ This single file describes the entire system:
 Build with:  uv run simple-soc --output-dir build/virtual
 """
 
+import contextlib
 import os
+import types
 
 from migen.fhdl.structure import _Fragment
 
 from litex.build.generic_platform import GenericPlatform, Pins, Subsignal
 from litex.build.io import CRG
 from litex.soc.integration.soc_core import SoCCore
+from litex.soc.interconnect import stream
+import litescope.core
 from litescope import LiteScopeAnalyzer
 
 # IOs ----------------------------------------------------------------------------------------------
@@ -89,10 +93,33 @@ class VirtualPlatform(GenericPlatform):
         return v_output.ns
 
 
+# LiteScope tweak ----------------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _no_storage_cdc():
+    """Build a LiteScopeAnalyzer without its storage readout CDC FIFO.
+
+    LiteScope's _Storage always puts a 4-deep scope->sys AsyncFIFO in front of the CSR readout.
+    With clock_domain="sys" it is redundant (~1k FFs on MAX10, which has no LUTRAM) and it hides
+    4 samples from mem_level (the host driver then uploads 4 samples short), so replace it by a
+    wire. The trigger memory AsyncFIFO (mask/value layout) is kept. Recheck on litescope bumps.
+    """
+    def fifo(layout, depth=None, buffered=False):
+        if [f[0] for f in layout] == ["data"]:              # _Storage readout CDC only.
+            return stream.SyncFIFO(layout, 0)               # depth 0: sink.connect(source).
+        return stream.AsyncFIFO(layout, depth, buffered)    # Trigger memory: unchanged.
+    saved = litescope.core.stream
+    litescope.core.stream = types.SimpleNamespace(**{**vars(stream), "AsyncFIFO": fifo})
+    try:
+        yield
+    finally:
+        litescope.core.stream = saved
+
+
 # SoC ----------------------------------------------------------------------------------------------
 
 class BaseSoC(SoCCore):
-    """CPU-less Wishbone-bus SoC: UARTBone + LiteScope ILA (+ ctrl CSRs, no SRAM)."""
+    """CPU-less Wishbone-bus SoC: UARTBone + LiteScope ILA (no controller, no SRAM)."""
 
     def __init__(self, platform, clk_freq=50e6, baudrate=115200,
                  ila_probes=None, ila_depth=4096, analyzer_csv="analyzer.csv", **kwargs):
@@ -105,6 +132,9 @@ class BaseSoC(SoCCore):
             cpu_type   = "None",   # CPU-less bus SoC.
             with_uart  = False,    # serial pins are used by UARTBone below.
             with_timer = False,
+            # No SoCController: ctrl_reset is not wired to this CRG and ctrl_bus_errors stays 0
+            # (point-to-point bus, no timeout), so only ctrl_scratch was left -- not worth its logic.
+            with_ctrl  = False,
             # No identifier module, no integrated SRAM/ROM: keeps the emitted
             # Verilog a truly self-contained single file (no external
             # .init/$readmem dependencies).
@@ -115,11 +145,12 @@ class BaseSoC(SoCCore):
         # UARTBone: host access to the Wishbone bus / CSRs over UART.
         self.add_uartbone(name="uartbone", uart_name="serial", clk_freq=clk_freq, baudrate=baudrate)
 
-        # LiteScope ILA: capture the user probes.
+        # LiteScope ILA: capture the user probes (same clock as the bus: no readout CDC FIFO).
         probes = [platform.request(name) for name in (ila_probes or ILA_PROBES)]
-        self.analyzer = LiteScopeAnalyzer(
-            groups       = {0: probes},
-            depth        = ila_depth,
-            clock_domain = "sys",
-            samplerate   = clk_freq,
-            csr_csv      = analyzer_csv)
+        with _no_storage_cdc():
+            self.analyzer = LiteScopeAnalyzer(
+                groups       = {0: probes},
+                depth        = ila_depth,
+                clock_domain = "sys",
+                samplerate   = clk_freq,
+                csr_csv      = analyzer_csv)

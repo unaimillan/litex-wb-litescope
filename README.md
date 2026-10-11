@@ -142,9 +142,11 @@ make clean      # remove all build artifacts (build/, dist/)
 The Verilator testbench (`test/tb_soc.cpp`) is **self-checking** and talk to the core over real UART frames (UARTBone
 protocol). It checks:
 
-1. that `ctrl_scratch` reads its reset value `0x12345678`;
-2. a `ctrl_scratch` write followed by a readback;
-3. a LiteScope capture: load a trigger, arm the storage (`done=0`), enable the trigger, and get `done=1`.
+1. that `analyzer_storage_offset` reads its reset value `0`;
+2. an `analyzer_storage_offset` write followed by a readback;
+3. a LiteScope capture: load a trigger, arm the storage (`done=0`), enable the trigger, and get `done=1`;
+4. the captured data: `mem_level` is 16, and all 16 samples, read word by word like `litescope_cli` does, match the
+   probe stimulus of consecutive clock cycles.
 
 It exits non-zero on any failure.
 
@@ -162,7 +164,7 @@ yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; \
 Resource estimate (Yosys, no vendor tools): `make -j synth-estimate` synthesizes `soc.v` for
 Intel MAX10, Gowin, Xilinx 7-series and Lattice MachXO2 (`LATTICE_FAMILY=xo2`) and prints the
 cell counts. Use `make synth-intel` (or `-gowin`, `-xilinx`, `-lattice`) to run a single target.
-With the default config, MAX10 uses about 2.6k LUT4 / 1.7k FF (≈2.7–3.5k LEs) plus 93 RAM blocks.
+With the default config, MAX10 uses about 1.85k LUT4 / 0.8k FF (≈1.9–2.7k LEs) plus 93 RAM blocks.
 
 ## Host round-trip (UARTBone + LiteScope over real/simulated UART)
 
@@ -173,9 +175,8 @@ Once the IP is running (FPGA or simulation), a host can talk to it:
 litex_server --uart --uart-port=/dev/ttyUSB0 --uart-baudrate=115200
 
 # Read/write CSRs by name, dump registers (no --ident: the core has no identifier)
-litex_cli --csr-csv dist/csr.csv --read ctrl_scratch          # -> 0x12345678
-litex_cli --csr-csv dist/csr.csv --write ctrl_scratch 0xcafebabe
-litex_cli --csr-csv dist/csr.csv --regs
+litex_cli --csr-csv dist/csr.csv --regs                       # dump all registers
+litex_cli --csr-csv dist/csr.csv --read analyzer_storage_mem_level
 
 # Configure and run the ILA, dump a capture
 litescope_cli --host localhost --port 1234 \
@@ -187,6 +188,10 @@ litescope_cli --host localhost --port 1234 \
 ## Notes
 
 - CPU-less by design: the host owns the bus through UARTBone; no software/BIOS runs inside.
+- Only UARTBone and LiteScope are kept: there is no SoC controller (`ctrl_*` CSRs), because its reset
+  was not connected and its bus-error counter could never count. LiteScope's readout clock-crossing FIFO
+  is replaced by a wire, because the ILA runs on the bus clock. This saves about 1k FFs on MAX10, and
+  `mem_level` then reports the whole capture.
 - No integrated SRAM/identifier is instantiated, so `soc.v` has zero external file
   dependencies — it is literally one file.
 - To target a real FPGA later, swap `VirtualPlatform` for a `litex_boards` platform

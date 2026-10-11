@@ -2,9 +2,10 @@
 //
 // Same scenario as test/tb_soc.cpp (Verilator): drives real UARTBone traffic
 // into serial_rx, decodes serial_tx, and checks:
-//   1. ctrl_scratch reset value (0x12345678) over UARTBone,
-//   2. ctrl_scratch write/readback,
-//   3. a LiteScope capture: storage_done drops when armed, rises after the trigger.
+//   1. analyzer_storage_offset reset value (0) over UARTBone,
+//   2. analyzer_storage_offset write/readback,
+//   3. a LiteScope capture: storage_done drops when armed, rises after the trigger,
+//   4. the captured data: mem_level == 16 and every sample word reads 0 (probes held at 0).
 // Calls $fatal on any failure.
 //
 // STATUS: not wired into the Makefile (Icarus support disabled, to be fixed). Manual run:
@@ -34,7 +35,6 @@
 module tb_soc;
 
     // CSR byte addresses (from build/virtual/csr.csv; update if _io/SoC change).
-    localparam CSR_CTRL_SCRATCH           = 32'h804;
     localparam CSR_ANALYZER_TRIGGER_EN    = 32'h004;
     localparam CSR_ANALYZER_TRIGGER_DONE  = 32'h008;
     localparam CSR_ANALYZER_TRIGGER_MEMWR = 32'h00c;
@@ -42,6 +42,11 @@ module tb_soc;
     localparam CSR_ANALYZER_STORAGE_DONE  = 32'h04c;
     localparam CSR_ANALYZER_STORAGE_LEN   = 32'h050;
     localparam CSR_ANALYZER_STORAGE_OFS   = 32'h054;
+    localparam CSR_ANALYZER_MEM_LEVEL     = 32'h058;
+    localparam CSR_ANALYZER_MEM_DATA      = 32'h05c;
+
+    localparam integer CAPTURE_LEN  = 16;  // samples per capture.
+    localparam integer SAMPLE_WORDS = 6;   // 165 probe bits -> 6 x 32-bit mem_data reads.
 
     localparam integer BIT      = `CLK_FREQ / `BAUDRATE;  // clk cycles per UART bit.
     localparam real    CLK_HALF = 1.0e9 / `CLK_FREQ / 2.0;  // ns.
@@ -123,6 +128,8 @@ module tb_soc;
     endtask
 
     integer failures = 0;
+    integer s;
+    reg [31:0] word;
 
     task check(input [8*34-1:0] what, input [31:0] addr, input [31:0] expected);
         reg [31:0] got;
@@ -136,7 +143,7 @@ module tb_soc;
 
     // Watchdog: a lost UART byte must not hang the simulation.
     initial begin
-        repeat (200 * 10 * BIT) @(posedge clk);
+        repeat (1500 * 10 * BIT) @(posedge clk);
         $fatal(1, "ICARUS TB: FAIL (timeout at cycle %0d)", cycle);
     end
 
@@ -145,15 +152,16 @@ module tb_soc;
         rst = 0;
         repeat (100) @(posedge clk);
 
-        check("ctrl_scratch reset value", CSR_CTRL_SCRATCH, 32'h12345678);
-        csr_write(CSR_CTRL_SCRATCH, 32'hCAFEBABE);
-        check("ctrl_scratch readback", CSR_CTRL_SCRATCH, 32'hCAFEBABE);
+        // CSR read/write over UARTBone (13-bit register; set back to 0 before arming).
+        check("storage_offset reset value", CSR_ANALYZER_STORAGE_OFS, 0);
+        csr_write(CSR_ANALYZER_STORAGE_OFS, 32'h0ABC);
+        check("storage_offset readback", CSR_ANALYZER_STORAGE_OFS, 32'h0ABC);
 
         // LiteScope: load one trigger condition (mask/value = 0 -> matches any sample once
         // the trigger is enabled). With no condition loaded, LiteScope triggers immediately.
         csr_write(CSR_ANALYZER_TRIGGER_MEMWR, 1);
         check("analyzer trigger loaded (done=0)", CSR_ANALYZER_TRIGGER_DONE, 0);
-        csr_write(CSR_ANALYZER_STORAGE_LEN, 16);
+        csr_write(CSR_ANALYZER_STORAGE_LEN, CAPTURE_LEN);
         csr_write(CSR_ANALYZER_STORAGE_OFS, 0);
         csr_write(CSR_ANALYZER_STORAGE_EN,  1);
         check("analyzer armed (done=0)", CSR_ANALYZER_STORAGE_DONE, 0);
@@ -161,6 +169,17 @@ module tb_soc;
         repeat (1000) @(posedge clk);
         check("analyzer triggered (done=1)", CSR_ANALYZER_TRIGGER_DONE, 1);
         check("analyzer captured (done=1)", CSR_ANALYZER_STORAGE_DONE, 1);
+
+        // Readback (as litescope_cli's upload): probes are held at 0, so every word is 0.
+        check("analyzer mem_level", CSR_ANALYZER_MEM_LEVEL, CAPTURE_LEN);
+        for (s = 0; s < CAPTURE_LEN * SAMPLE_WORDS; s = s + 1) begin
+            csr_read(CSR_ANALYZER_MEM_DATA, word);
+            if (word !== 0) begin
+                failures = failures + 1;
+                $display("[tb]   sample %0d word %0d = 0x%08x mismatch", s / SAMPLE_WORDS, s % SAMPLE_WORDS, word);
+            end
+        end
+        $display("[tb] %-34s %0d samples done", "analyzer data readback", CAPTURE_LEN);
 
         if (failures != 0)
             $fatal(1, "ICARUS TB: FAIL (%0d check(s) failed, %0d cycles)", failures, cycle);

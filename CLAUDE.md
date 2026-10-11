@@ -27,8 +27,10 @@ make clean              # rm -rf build dist
   regeneration when they change. `simple-soc` rejects `clk_freq < 16 * baudrate`.
 - The testbenches are self-checking (non-zero exit on failure) and speak the UARTBone protocol over
   `serial_rx`/`serial_tx`: cmd 0x01 write / 0x02 read, length, 32-bit big-endian **word** address
-  (byte_addr >> 2), big-endian data. CSR byte addresses are hard-coded from `csr.csv` (ctrl_scratch
-  0x804, analyzer_* at 0x0..) — update both TBs if the CSR map changes.
+  (byte_addr >> 2), big-endian data. CSR byte addresses are hard-coded from `csr.csv` (analyzer_* at
+  0x0..0x5c; `analyzer_storage_offset` doubles as the R/W check) — update both TBs if the CSR map
+  changes. The Verilator TB also reads back a 16-sample capture (6 words/sample, LSW first) and
+  checks it against the `tick()` probe stimulus; Icarus holds probes at 0 and expects zeros.
 - LiteScope gotcha: with no trigger condition loaded it triggers immediately, and `storage_done` is 1
   while idle — the TBs load one match-all condition (`trigger_mem_write`) before arming.
 - **Icarus support is commented out in the Makefile (the user will fix it later).** `test/tb_soc.v` exists
@@ -40,7 +42,7 @@ make clean              # rm -rf build dist
   `LATTICE_FAMILY` (xo2), `SYNTH_TIMEOUT` (60 s per run; logs in `build/synth/<t>.log`). Other
   `synth_*` passes were surveyed: `synth`, `_achronix`, `_fabulous`, `_quicklogic`, `_sf2` take
   >60 s; `synth_microchip` fails on initialized FFs; `synth_easic` needs eTools. The ILA sample
-  buffer (167 bit × `ILA_DEPTH`) dominates BRAM.
+  buffer (167 bit × `ILA_DEPTH`) dominates BRAM. Default config on MAX10: ~1850 LUT4, ~830 FF, 93 M9K.
 - Optional Yosys smoke test:
   `yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; proc; opt; check"`.
 
@@ -56,8 +58,12 @@ make clean              # rm -rf build dist
     `litex.build.sim.verilator.SimVerilatorToolchain.build`) only calls `get_verilog()` and writes
     a single flat `.v`; no toolchain runs.
   - `BaseSoC(SoCCore)` — `CRG` from `clk`/`rst` pins (must be set **before** `SoCCore.__init__`),
-    `cpu_type="None"`, no UART/timer, `add_uartbone(uart_name="serial")`, `LiteScopeAnalyzer`
-    (`samplerate=clk_freq`, so VCD timescales from `litescope_cli` are correct).
+    `cpu_type="None"`, no UART/timer/controller (`with_ctrl=False`: no `ctrl_*` CSRs), `add_uartbone(uart_name="serial")`, `LiteScopeAnalyzer`
+    (`samplerate=clk_freq`, so VCD timescales from `litescope_cli` are correct), built inside
+    `_no_storage_cdc()`: it temporarily swaps `litescope.core.stream.AsyncFIFO` so `_Storage`'s
+    redundant scope→sys readout FIFO (layout `[("data", w)]`) becomes a wire (~1k FFs on MAX10; it
+    also made `mem_level` under-report by 4). The trigger FIFO (mask/value) is untouched. This
+    relies on LiteScope internals — recheck it, with `make test`, when bumping litescope.
 - `src/litex_wb_litescope/build_soc.py` — `simple-soc` entry point; runs `Builder(...,
   compile_software=False, compile_gateware=False).build(run=False)`. `csr.csv` comes from Builder,
   `analyzer.csv` from `LiteScopeAnalyzer.do_exit`. Both are needed by host tools

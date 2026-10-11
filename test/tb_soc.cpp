@@ -1,9 +1,10 @@
 // Self-checking Verilator harness for the generated single-file LiteX IP.
 //
 // Drives real UARTBone traffic into serial_rx, decodes serial_tx, and checks:
-//   1. ctrl_scratch reset value (0x12345678) over UARTBone,
-//   2. ctrl_scratch write/readback,
-//   3. a LiteScope capture: storage_done drops when armed, rises after the trigger.
+//   1. analyzer_storage_offset reset value (0) over UARTBone,
+//   2. analyzer_storage_offset write/readback,
+//   3. a LiteScope capture: storage_done drops when armed, rises after the trigger,
+//   4. the captured data: mem_level == 16 and 16 samples consistent with the probe stimulus.
 // Exits non-zero on any failure. Same scenario as test/tb_soc.v (Icarus).
 //
 // Build & run: make simulate   (verilator --prefix Vdut, -DCLK_FREQ/-DBAUDRATE via -CFLAGS)
@@ -22,7 +23,6 @@
 #endif
 
 // CSR byte addresses (from build/virtual/csr.csv; update if _io/SoC change).
-static const uint32_t CSR_CTRL_SCRATCH           = 0x804;
 static const uint32_t CSR_ANALYZER_TRIGGER_EN    = 0x004;
 static const uint32_t CSR_ANALYZER_TRIGGER_DONE  = 0x008;
 static const uint32_t CSR_ANALYZER_TRIGGER_MEMWR = 0x00c;
@@ -30,6 +30,11 @@ static const uint32_t CSR_ANALYZER_STORAGE_EN    = 0x048;
 static const uint32_t CSR_ANALYZER_STORAGE_DONE  = 0x04c;
 static const uint32_t CSR_ANALYZER_STORAGE_LEN   = 0x050;
 static const uint32_t CSR_ANALYZER_STORAGE_OFS   = 0x054;
+static const uint32_t CSR_ANALYZER_MEM_LEVEL     = 0x058;
+static const uint32_t CSR_ANALYZER_MEM_DATA      = 0x05c;
+
+static const unsigned CAPTURE_LEN = 16;  // samples per capture.
+static const unsigned SAMPLE_WORDS = 6;  // 165 probe bits -> 6 x 32-bit mem_data reads, LSW first.
 
 static const unsigned BIT     = CLK_FREQ / BAUDRATE;  // clk cycles per UART bit.
 static const unsigned TIMEOUT = 64 * BIT;             // max wait for a response byte.
@@ -120,15 +125,16 @@ int main(int argc, char **argv) {
     dut->rst = 0;
     wait(100);
 
-    check("ctrl_scratch reset value", CSR_CTRL_SCRATCH, 0x12345678);
-    csr_write(CSR_CTRL_SCRATCH, 0xCAFEBABE);
-    check("ctrl_scratch readback", CSR_CTRL_SCRATCH, 0xCAFEBABE);
+    // CSR read/write over UARTBone (13-bit register; set back to 0 before arming).
+    check("storage_offset reset value", CSR_ANALYZER_STORAGE_OFS, 0);
+    csr_write(CSR_ANALYZER_STORAGE_OFS, 0x0ABC);
+    check("storage_offset readback", CSR_ANALYZER_STORAGE_OFS, 0x0ABC);
 
     // LiteScope: load one trigger condition (mask/value = 0 -> matches any sample once
     // the trigger is enabled). With no condition loaded, LiteScope triggers immediately.
     csr_write(CSR_ANALYZER_TRIGGER_MEMWR, 1);
     check("analyzer trigger loaded (done=0)", CSR_ANALYZER_TRIGGER_DONE, 0);
-    csr_write(CSR_ANALYZER_STORAGE_LEN, 16);
+    csr_write(CSR_ANALYZER_STORAGE_LEN, CAPTURE_LEN);
     csr_write(CSR_ANALYZER_STORAGE_OFS, 0);
     csr_write(CSR_ANALYZER_STORAGE_EN,  1);
     check("analyzer armed (done=0)", CSR_ANALYZER_STORAGE_DONE, 0);
@@ -136,6 +142,32 @@ int main(int argc, char **argv) {
     wait(1000);
     check("analyzer triggered (done=1)", CSR_ANALYZER_TRIGGER_DONE, 1);
     check("analyzer captured (done=1)", CSR_ANALYZER_STORAGE_DONE, 1);
+
+    // Readback (as litescope_cli's upload): every sample must match the tick() stimulus for its
+    // cycle c = probe2, and consecutive samples must be consecutive cycles (subsampler = 0).
+    // Sample bits: probe0 [0], probe1 [4:1], probe2 [36:5], probe3 [164:37], zero padding above.
+    check("analyzer mem_level", CSR_ANALYZER_MEM_LEVEL, CAPTURE_LEN);
+    int bad = 0;
+    uint32_t prev = 0;
+    for (unsigned s = 0; s < CAPTURE_LEN; s++) {
+        uint32_t w[SAMPLE_WORDS] = {0};
+        for (unsigned i = 0; i < SAMPLE_WORDS; i++)
+            if (!csr_read(CSR_ANALYZER_MEM_DATA, w[i])) bad++;
+        auto bits = [&](unsigned lo, unsigned n) {
+            uint32_t v = 0;
+            for (unsigned b = 0; b < n; b++) v |= ((w[(lo + b) / 32] >> ((lo + b) % 32)) & 1u) << b;
+            return v;
+        };
+        uint32_t c = bits(5, 32);
+        bool ok = bits(0, 1) == (c & 1) && bits(1, 4) == ((c >> 1) & 0xF) &&
+                  bits(37, 32) == 0xDEADBEEFu && bits(69, 32) == ~c &&
+                  bits(101, 32) == (c << 1) && bits(133, 32) == c && bits(165, 27) == 0 &&
+                  (s == 0 || c == prev + 1);
+        if (!ok) { bad++; printf("[tb]   sample %2u (cycle %u) mismatch\n", s, c); }
+        prev = c;
+    }
+    failures += bad;
+    printf("[tb] %-34s %u samples %s\n", "analyzer data readback", CAPTURE_LEN, bad ? "FAIL" : "OK");
 
     dut->final();
     delete dut;
