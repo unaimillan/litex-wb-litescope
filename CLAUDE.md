@@ -41,8 +41,10 @@ make clean              # rm -rf build dist
 ## Architecture
 
 - `src/litex_wb_litescope/soc.py` — the **entire system** in one file:
-  - `PINS` dict → every top-level port of the IP (subsignals become `<group>_<sub>`, e.g.
-    `serial_tx`). `direction` is informational; Migen infers real directions. `ILA_PROBES`/`ILA_DEPTH`
+  - `_io` list (LiteX board-style `(name, 0, Pins(width) | Subsignal(...))`, like
+    `litex_sim.py`) → every top-level port of the IP (subsignals become `<group>_<sub>`, e.g.
+    `serial_tx`). `Pins(n)` = n unplaced pins; Migen infers directions. `io_ports(_io)` lists the
+    resulting port names. `ILA_PROBES`/`ILA_DEPTH`
     select which pins the analyzer captures.
   - `VirtualPlatform(GenericPlatform)` — vendor-agnostic platform whose `build()` (mirroring
     `litex.build.sim.verilator.SimVerilatorToolchain.build`) only calls `get_verilog()` and writes
@@ -61,7 +63,7 @@ make clean              # rm -rf build dist
 
 - Keep `ident=""` and `integrated_sram_size=0`: adding an identifier or SRAM/ROM introduces
   `.init`/`$readmem` file dependencies and breaks the "single self-contained file" property.
-- Changing `PINS` changes the IP's port list — update `test/tb_soc.cpp` (Verilator exposes signals
+- Changing `_io` changes the IP's port list — update `test/tb_soc.cpp` (Verilator exposes signals
   >64 bits as `uint32_t` word arrays, e.g. `probe3[0..3]`; built with `--prefix Vdut`),
   `test/tb_soc.v`, and the README instantiation example.
 - To target real FPGA hardware, swap `VirtualPlatform` for a `litex_boards` platform; SoC code stays.

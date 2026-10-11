@@ -72,31 +72,38 @@ CLI options: `--clk-freq` (default 50 MHz), `--baudrate` (default 115200), `--bu
 
 ## Customize pins / probes
 
-Edit the `PINS` dict at the top of `src/litex_wb_litescope/soc.py`, then rebuild.
-Every top-level port of the IP comes from this dict:
+Edit the `_io` list at the top of `src/litex_wb_litescope/soc.py`, then rebuild.
+It uses the same `Pins`/`Subsignal` format as LiteX board files (`litex_boards/platforms/*.py`).
+Every top-level port of the IP comes from this list:
 
 ```python
-PINS = {
-    "clk":    {"direction": "in",  "width": 1},       # system clock
-    "rst":    {"direction": "in",  "width": 1},       # system reset (active-high)
-    "serial": {"direction": "inout", "subsignals": {  # UARTBone serial link
-        "tx": {"direction": "out", "width": 1},
-        "rx": {"direction": "in",  "width": 1},
-    }},
+_io = [
+    # Clk / Rst.
+    ("clk", 0, Pins(1)),
+    ("rst", 0, Pins(1)),  # active-high.
+
+    # UARTBone serial link (host <-> SoC over UART).
+    ("serial", 0,
+        Subsignal("tx", Pins(1)),  # out.
+        Subsignal("rx", Pins(1)),  # in.
+    ),
+
     # LiteScope ILA probes (signals to observe).
-    "probe0": {"direction": "in", "width": 1},
-    "probe1": {"direction": "in", "width": 4},
-    "probe2": {"direction": "in", "width": 32},
-    "probe3": {"direction": "in", "width": 128},
-}
+    ("probe0", 0, Pins(1)),
+    ("probe1", 0, Pins(4)),
+    ("probe2", 0, Pins(32)),
+    ("probe3", 0, Pins(128)),
+]
 ILA_PROBES = ["probe0", "probe1", "probe2", "probe3"]
 ILA_DEPTH  = 4096
 ```
 
-`direction` is informational — Migen infers the actual port direction from the logic.
-Probes are sampled in the `clk` domain without synchronizers: drive them from logic synchronous to `clk`.
+`Pins(<width>)` declares `<width>` unplaced pins, because a virtual platform has no package locations.
+Subsignals become `<name>_<subsignal>` ports (`serial_tx`, `serial_rx`).
+Migen infers port directions from the logic.
+Probes are sampled in the `clk` domain without synchronizers, so drive them from logic synchronous to `clk`.
 
-If you change `PINS`, update the testbenches (`test/tb_soc.cpp`, `test/tb_soc.v`) too.
+If you change `_io`, update the testbenches (`test/tb_soc.cpp`, `test/tb_soc.v`) too.
 
 ## Instantiate in an external Verilog project
 

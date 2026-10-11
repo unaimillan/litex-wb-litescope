@@ -9,7 +9,7 @@ import os
 
 from litex.soc.integration.builder import Builder
 
-from litex_wb_litescope.soc import PINS, ILA_PROBES, ILA_DEPTH, VirtualPlatform, BaseSoC
+from litex_wb_litescope.soc import _io, ILA_PROBES, ILA_DEPTH, VirtualPlatform, BaseSoC, io_ports
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     # Whole-system definition (pins + platform + SoC).
-    platform = VirtualPlatform(PINS, name=args.build_name)
+    platform = VirtualPlatform(_io, name=args.build_name)
     soc = BaseSoC(platform,
         clk_freq     = args.clk_freq,
         baudrate     = args.baudrate,
@@ -50,10 +50,7 @@ def main():
     print(f"[simple-soc]   Analyzer config: {os.path.join(output_dir, 'analyzer.csv')}")
     print("")
     print(f"[simple-soc] Instantiate '{args.build_name}' in your external Verilog project and connect:")
-    ports = [f"{name}_{sub}" if "subsignals" in spec else name
-             for name, spec in PINS.items()
-             for sub in spec.get("subsignals", [None])]
-    print("[simple-soc]   " + ", ".join(ports))
+    print("[simple-soc]   " + ", ".join(io_ports(_io)))
 
 
 if __name__ == "__main__":

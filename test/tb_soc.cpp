@@ -21,7 +21,7 @@
 #define BAUDRATE 115200
 #endif
 
-// CSR byte addresses (from build/virtual/csr.csv; update if PINS/SoC change).
+// CSR byte addresses (from build/virtual/csr.csv; update if _io/SoC change).
 static const uint32_t CSR_CTRL_SCRATCH           = 0x804;
 static const uint32_t CSR_ANALYZER_TRIGGER_EN    = 0x004;
 static const uint32_t CSR_ANALYZER_TRIGGER_DONE  = 0x008;

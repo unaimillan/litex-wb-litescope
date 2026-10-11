@@ -33,7 +33,7 @@
 
 module tb_soc;
 
-    // CSR byte addresses (from build/virtual/csr.csv; update if PINS/SoC change).
+    // CSR byte addresses (from build/virtual/csr.csv; update if _io/SoC change).
     localparam CSR_CTRL_SCRATCH           = 32'h804;
     localparam CSR_ANALYZER_TRIGGER_EN    = 32'h004;
     localparam CSR_ANALYZER_TRIGGER_DONE  = 32'h008;

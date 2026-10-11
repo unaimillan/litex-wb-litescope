@@ -2,7 +2,7 @@
 LiteX UARTBone + LiteScope standalone IP core — whole-system definition.
 
 This single file describes the entire system:
-  * PINS             - user-editable top-level pin/probe specification.
+  * _io              - user-editable top-level pin/probe list (LiteX Pins/Subsignal).
   * VirtualPlatform  - tool-agnostic "virtual" platform that emits ONE
                        self-contained Verilog file (no vendor toolchain).
   * BaseSoC          - CPU-less SoC with UARTBone (host UART->Wishbone bridge)
@@ -20,54 +20,44 @@ from litex.build.io import CRG
 from litex.soc.integration.soc_core import SoCCore
 from litescope import LiteScopeAnalyzer
 
-# User-editable pin/probe specification ------------------------------------------------------------
-# Every top-level port of the generated Verilog IP comes from an entry here.
-# "direction" is informational only: migen infers the actual port direction
-# from the logic that drives/reads each pin.
-# ILA probes are sampled directly in the clk domain (no synchronizers): drive
-# them from logic synchronous to clk.
+# IOs ----------------------------------------------------------------------------------------------
+# Every top-level port of the generated Verilog IP comes from an entry here (LiteX board-style io
+# list, see litex_boards/platforms/*.py). Pins(<width>) = <width> unplaced pins (no package
+# locations on a virtual platform); migen infers the actual port directions. Subsignals become
+# <name>_<subsignal> ports (e.g. serial_tx).
+# ILA probes are sampled directly in the clk domain (no synchronizers): drive them from logic
+# synchronous to clk.
 
-PINS = {
-    # System pins.
-    "clk":   {"direction": "in",  "width": 1},
-    "rst":   {"direction": "in",  "width": 1},
+_io = [
+    # Clk / Rst.
+    ("clk", 0, Pins(1)),
+    ("rst", 0, Pins(1)),  # active-high.
+
     # UARTBone serial link (host <-> SoC over UART).
-    "serial": {
-        "direction": "inout",
-        "subsignals": {
-            "tx": {"direction": "out", "width": 1},
-            "rx": {"direction": "in",  "width": 1},
-        },
-    },
+    ("serial", 0,
+        Subsignal("tx", Pins(1)),  # out.
+        Subsignal("rx", Pins(1)),  # in.
+    ),
+
     # LiteScope ILA probes (signals to observe with the logic analyzer).
-    "probe0": {"direction": "in", "width": 1},
-    "probe1": {"direction": "in", "width": 4},
-    "probe2": {"direction": "in", "width": 32},
-    "probe3": {"direction": "in", "width": 128},
-}
+    ("probe0", 0, Pins(1)),
+    ("probe1", 0, Pins(4)),
+    ("probe2", 0, Pins(32)),
+    ("probe3", 0, Pins(128)),
+]
 
 # LiteScope ILA configuration.
-ILA_PROBES = ["probe0", "probe1", "probe2", "probe3"]  # pin groups tapped by the analyzer.
+ILA_PROBES = ["probe0", "probe1", "probe2", "probe3"]  # io groups tapped by the analyzer.
 ILA_DEPTH  = 4096                                      # number of samples (4k).
 
 
-# Pins -> LiteX io list ----------------------------------------------------------------------------
-
-def build_io(pins):
-    """Convert the user pin dict into a LiteX io list (symbolic pin locations)."""
-    io = []
-    for name, spec in pins.items():
-        subsignals = spec.get("subsignals")
-        if subsignals:
-            subs = []
-            for sname, sspec in subsignals.items():
-                loc = " ".join("{}_{}_{}".format(name, sname, i) for i in range(sspec["width"]))
-                subs.append(Subsignal(sname, Pins(loc)))
-            io.append((name, 0, *subs))
-        else:
-            loc = " ".join("{}_{}".format(name, i) for i in range(spec["width"]))
-            io.append((name, 0, Pins(loc)))
-    return io
+def io_ports(io):
+    """Top-level Verilog port names generated from an io list (<name> or <name>_<subsignal>)."""
+    ports = []
+    for name, _, *constraints in io:
+        subs = [c.name for c in constraints if isinstance(c, Subsignal)]
+        ports += [f"{name}_{sub}" for sub in subs] if subs else [name]
+    return ports
 
 
 # Virtual platform ---------------------------------------------------------------------------------
@@ -76,12 +66,12 @@ class VirtualPlatform(GenericPlatform):
     """Tool-agnostic "virtual" platform: emits a single standalone Verilog netlist.
 
     The whole SoC is lowered into ONE Verilog module whose top-level ports are
-    exactly the pins declared in PINS, ready to be instantiated as a black-box
+    exactly the pins declared in the io list, ready to be instantiated as a black-box
     IP core in an external Verilog project.
     """
 
-    def __init__(self, pins, name="virtual", device="virtual"):
-        GenericPlatform.__init__(self, device, build_io(pins), name=name)
+    def __init__(self, io=_io, name="virtual", device="virtual"):
+        GenericPlatform.__init__(self, device, io, name=name)
 
     def build(self, fragment, build_dir="build", build_name=None, build=True, run=False, **kwargs):
         # (Mirrors litex.build.sim.verilator.SimVerilatorToolchain.build but only
