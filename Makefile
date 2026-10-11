@@ -6,6 +6,7 @@
 #   make test              -> lint + Verilator self-checking simulation
 #   make simulate          -> Verilator-compile the IP + C++ harness and run it
 #   make lint              -> Verilator lint-only pass on the generated gateware
+#   make -j synth-estimate -> Yosys LUT/FF/BRAM estimate for MAX10, Gowin, Xilinx, Lattice
 #   make clean             -> Remove all build artifacts (build/, dist/)
 #   make help              -> Show this help
 #
@@ -29,6 +30,17 @@ TB_CPP     ?= test/tb_soc.cpp
 # # Icarus run timeout (seconds): a timeout prints a warning instead of failing.
 # IVL_TIMEOUT ?= 180
 
+# Yosys resource estimate (synth-estimate): one synth_* run per target, each with a timeout.
+SYNTH_DIR      ?= build/synth
+SYNTH_TIMEOUT  ?= 60
+SYNTH_TARGETS  ?= intel gowin xilinx lattice
+# synth_lattice requires -family: xo2|xo3|xo3d|lifcl|lfd2nx (ECP5 is synth_ecp5).
+LATTICE_FAMILY ?= xo2
+SYNTH_CMD_intel   := synth_intel -family max10
+SYNTH_CMD_gowin   := synth_gowin
+SYNTH_CMD_xilinx  := synth_xilinx
+SYNTH_CMD_lattice := synth_lattice -family $(LATTICE_FAMILY)
+
 TOP_MODULE := $(BUILD_NAME)
 GATEWARE   := $(OUT_DIR)/gateware/$(TOP_MODULE).v
 SYSFILES   := $(OUT_DIR)/csr.csv $(OUT_DIR)/csr.json $(OUT_DIR)/analyzer.csv
@@ -45,7 +57,7 @@ PARAMS_VAL := $(BUILD_NAME) $(CLK_FREQ) $(BAUDRATE)
 
 # ---- Targets ----------------------------------------------------------------
 
-.PHONY: all generate build test simulate lint clean help FORCE
+.PHONY: all generate build test simulate lint synth-estimate clean help FORCE
 
 all: build test
 
@@ -98,6 +110,20 @@ $(VERI_BIN): $(GATEWARE) $(TB_CPP)
 
 lint: $(GATEWARE) ## Verilator lint-only pass on the generated gateware
 	verilator --lint-only -Wno-fatal $(VERI_WARN) --top-module $(TOP_MODULE) $(GATEWARE)
+
+synth-estimate: $(SYNTH_TARGETS:%=$(SYNTH_DIR)/%.stat) ## Yosys resource estimate (MAX10, Gowin, Xilinx, Lattice; use -j)
+	@for f in $^; do echo "== $$(basename $$f .stat)"; sed -n '/cells$$/,/^$$/p' $$f; done
+
+synth-%: $(SYNTH_DIR)/%.stat
+	@echo "== $*"; sed -n '/cells$$/,/^$$/p' $<
+
+$(SYNTH_DIR)/%.stat: $(GATEWARE)
+	@mkdir -p $(SYNTH_DIR)
+	@echo "[make] yosys $(SYNTH_CMD_$*) (log: $(SYNTH_DIR)/$*.log)"
+	@timeout $(SYNTH_TIMEOUT) yosys -q -l $(SYNTH_DIR)/$*.log \
+	    -p "read_verilog $<; $(SYNTH_CMD_$*) -top $(TOP_MODULE); tee -q -o $@ stat" >/dev/null 2>&1 || \
+	    { rc=$$?; rm -f $@; echo "[make] $* failed (rc=$$rc, 124 = timeout after $(SYNTH_TIMEOUT)s):" >&2; \
+	      tail -n 5 $(SYNTH_DIR)/$*.log >&2; exit $$rc; }
 
 clean: ## Remove all build artifacts
 	rm -rf build $(DIST_DIR)

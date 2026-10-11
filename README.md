@@ -159,6 +159,11 @@ yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; \
           proc; opt; check"  # -> "Found and reported 0 problems."
 ```
 
+Resource estimate (Yosys, no vendor tools): `make -j synth-estimate` synthesizes `soc.v` for
+Intel MAX10, Gowin, Xilinx 7-series and Lattice MachXO2 (`LATTICE_FAMILY=xo2`) and prints the
+cell counts. Use `make synth-intel` (or `-gowin`, `-xilinx`, `-lattice`) to run a single target.
+With the default config, MAX10 uses about 2.6k LUT4 / 1.7k FF (≈2.7–3.5k LEs) plus 93 RAM blocks.
+
 ## Host round-trip (UARTBone + LiteScope over real/simulated UART)
 
 Once the IP is running (FPGA or simulation), a host can talk to it:

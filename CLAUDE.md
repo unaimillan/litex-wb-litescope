@@ -18,6 +18,7 @@ make build              # generate + copy soc.v, csr.csv, csr.json, analyzer.csv
 make generate           # uv run simple-soc ... -> build/virtual/{gateware/soc.v,csr.csv,csr.json,analyzer.csv}
 make test               # lint + Verilator self-checking sim (test/tb_soc.cpp), ~10 s
 make simulate           # Verilator sim only
+make -j synth-estimate  # Yosys LUT/FF/BRAM estimate: MAX10, Gowin, Xilinx, Lattice -> build/synth/*.stat, ~10 s
 make clean              # rm -rf build dist
 ```
 
@@ -35,6 +36,11 @@ make clean              # rm -rf build dist
   other in Icarus: ILA mux ↔ storage FSM hangs when probe data is non-zero, and UARTBone ↔ wishbone2csr
   runs ~100× slower. See its header. `vvp` buffers stdout when writing to files or pipes, so a killed
   run shows no output.
+- `synth-estimate` vars: `SYNTH_TARGETS` (intel gowin xilinx lattice; also `make synth-<t>`),
+  `LATTICE_FAMILY` (xo2), `SYNTH_TIMEOUT` (60 s per run; logs in `build/synth/<t>.log`). Other
+  `synth_*` passes were surveyed: `synth`, `_achronix`, `_fabulous`, `_quicklogic`, `_sf2` take
+  >60 s; `synth_microchip` fails on initialized FFs; `synth_easic` needs eTools. The ILA sample
+  buffer (167 bit × `ILA_DEPTH`) dominates BRAM.
 - Optional Yosys smoke test:
   `yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; proc; opt; check"`.
 
