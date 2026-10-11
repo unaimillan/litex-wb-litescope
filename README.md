@@ -19,7 +19,7 @@ instantiated as a black-box IP core.
 
 - `uv` (astral) + Python ≥ 3.12
 - LiteX 2026.04 stack — already pinned in `pyproject.toml` (`uv sync` installs it)
-- For verification: **oss-cad-suite** (Verilator, Yosys, Icarus) — see below
+- For verification: **oss-cad-suite** (Verilator; optionally Yosys) — see below
 
 ## Install
 
@@ -43,20 +43,30 @@ source /opt/oss-cad-suite/environment
 ## Build the IP
 
 ```sh
-make generate          # == uv run simple-soc --output-dir build/virtual
+make build             # generate the IP and copy the final files to dist/
+make generate          # only generate into build/virtual/
 ```
 
 (Equivalent manual command: `uv run simple-soc --output-dir build/virtual`)
+
+Core parameters are Makefile variables (forwarded to `simple-soc`; changing them triggers a rebuild):
+
+```sh
+make build CLK_FREQ=100000000 BAUDRATE=1000000 BUILD_NAME=my_ila
+```
 
 Outputs:
 
 | File | Purpose |
 |------|---------|
-| `build/virtual/gateware/soc.v` | **Single-file IP** — one `module soc`, fully self-contained (no `.init`/`$readmem` deps) |
-| `build/virtual/csr.csv` | SoC register map (needed by `litex_cli` / `litescope_cli`) |
-| `build/virtual/analyzer.csv` | LiteScope ILA signal/group layout (needed by `litescope_cli`) |
+| `soc.v` | **Single-file IP** — one `module soc`, fully self-contained (no `.init`/`$readmem` deps) |
+| `csr.csv` / `csr.json` | SoC register map (needed by `litex_cli` / `litescope_cli`) |
+| `analyzer.csv` | LiteScope ILA signal/group layout and samplerate (needed by `litescope_cli`) |
 
-CLI options: `--clk-freq` (default 100 MHz), `--baudrate` (default 115200), `--build-name`.
+`make build` copies these to `dist/`; `make generate` leaves them in `build/virtual/` (`soc.v` under `gateware/`).
+
+CLI options: `--clk-freq` (default 50 MHz), `--baudrate` (default 115200), `--build-name`, `--output-dir`.
+`--clk-freq` must be at least 16× `--baudrate`.
 
 > The generated IP must be clocked at `--clk-freq` for the UARTBone baudrate to be correct.
 
@@ -84,6 +94,9 @@ ILA_DEPTH  = 4096
 ```
 
 `direction` is informational — Migen infers the actual port direction from the logic.
+Probes are sampled in the `clk` domain without synchronizers: drive them from logic synchronous to `clk`.
+
+If you change `PINS`, update the testbenches (`test/tb_soc.cpp`, `test/tb_soc.v`) too.
 
 ## Instantiate in an external Verilog project
 
@@ -115,34 +128,29 @@ endmodule
 ## Verification
 
 ```sh
-make lint       # 1. Verilator lint-only pass (benign generated-code warnings suppressed)
-make simulate   # 2. Verilator-compile + run the black-box C++ harness -> "VERILATOR TB: PASS (4000 cycles)"
-make clean      # remove all build artifacts
+make test       # lint + Verilator self-checking simulation (~10 s)
+make clean      # remove all build artifacts (build/, dist/)
 ```
 
-(Equivalent manual commands:)
+The Verilator testbench (`test/tb_soc.cpp`) is **self-checking** and talk to the core over real UART frames (UARTBone
+protocol). It checks:
+
+1. that `ctrl_scratch` reads its reset value `0x12345678`;
+2. a `ctrl_scratch` write followed by a readback;
+3. a LiteScope capture: load a trigger, arm the storage (`done=0`), enable the trigger, and get `done=1`.
+
+It exits non-zero on any failure.
+
+> **Icarus support is disabled for now.** `test/tb_soc.v` has the same checks, but it is not
+> wired into the Makefile. Icarus hangs or crawls on the generated comb logic (`always @(*)`
+> blocks with default-then-override assignments re-trigger each other). Details are in that
+> file's header.
 
 ```sh
-# 1. Lint
-verilator --lint-only -Wno-fatal -Wno-COMBDLY -Wno-WIDTHEXPAND \
-          -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE \
-          --top-module soc build/virtual/gateware/soc.v
-
-# 2. Compile + run the black-box C++ harness (4000 cycles >= ILA depth)
-verilator --cc --exe --timing -Wall -Wno-fatal --top-module soc \
-          -Mdir build/verilator build/virtual/gateware/soc.v test/tb_soc.cpp
-make -C build/verilator -f Vsoc.mk
-./build/verilator/Vsoc
-```
-
-```sh
-# 3. Optional: Yosys elaboration/structural smoke test
+# Optional: Yosys elaboration/structural smoke test
 yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; \
           proc; opt; check"  # -> "Found and reported 0 problems."
 ```
-
-(Icarus `iverilog` simulation was intentionally dropped — its interpreted `vvp` runtime is
-impractically slow with the 4096×165-bit ILA storage.)
 
 ## Host round-trip (UARTBone + LiteScope over real/simulated UART)
 
@@ -152,13 +160,15 @@ Once the IP is running (FPGA or simulation), a host can talk to it:
 # TCP bridge to the SoC's UARTBone (baudrate must match the build)
 litex_server --uart --uart-port=/dev/ttyUSB0 --uart-baudrate=115200
 
-# Read/write CSRs (e.g. ctrl.scratch), dump registers
-litex_cli --ident --regs --write 0x0/0x800/0x0 0x12345678
+# Read/write CSRs by name, dump registers (no --ident: the core has no identifier)
+litex_cli --csr-csv dist/csr.csv --read ctrl_scratch          # -> 0x12345678
+litex_cli --csr-csv dist/csr.csv --write ctrl_scratch 0xcafebabe
+litex_cli --csr-csv dist/csr.csv --regs
 
 # Configure and run the ILA, dump a capture
 litescope_cli --host localhost --port 1234 \
-              --csv build/virtual/analyzer.csv \
-              --csr-csv build/virtual/csr.csv \
+              --csv dist/analyzer.csv \
+              --csr-csv dist/csr.csv \
               --rising-edge probe0 --dump dump.vcd
 ```
 

@@ -7,27 +7,36 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A CPU-less LiteX SoC (Wishbone bus) with UARTBone (UART→Wishbone bridge) and a LiteScope ILA,
 emitted as **one self-contained Verilog file** (`build/virtual/gateware/soc.v`, `module soc`) meant
 to be dropped into an external Verilog project as a black-box IP. Python ≥3.12, managed with `uv`;
-the whole LiteX stack is pinned to git tag `2026.04` in `pyproject.toml` (`[tool.uv.sources]`).
-Verilator/Yosys come from oss-cad-suite (installed by the devcontainer).
+only `migen` (pinned rev), `litex` and `litescope` (git tag `2026.04`) are dependencies — nothing
+else is imported by a build. Verilator/Yosys come from oss-cad-suite.
 
 ## Commands
 
 ```sh
 uv sync                 # install the pinned LiteX stack into .venv
-make generate           # uv run simple-soc --output-dir build/virtual -> soc.v, csr.csv, analyzer.csv
-make lint               # verilator --lint-only on soc.v (benign generated-code warnings suppressed)
-make simulate           # Verilator-compile soc.v + test/tb_soc.cpp, run -> "VERILATOR TB: PASS (4000 cycles)"
-make clean              # rm -rf build
+make build              # generate + copy soc.v, csr.csv, csr.json, analyzer.csv to dist/
+make generate           # uv run simple-soc ... -> build/virtual/{gateware/soc.v,csr.csv,csr.json,analyzer.csv}
+make test               # lint + Verilator self-checking sim (test/tb_soc.cpp), ~10 s
+make simulate           # Verilator sim only
+make clean              # rm -rf build dist
 ```
 
-- `simple-soc` options: `--clk-freq` (default 100e6), `--baudrate` (115200), `--build-name` (soc),
-  `--output-dir`. The IP must be clocked at `--clk-freq` for the UART baudrate to be correct.
-- The Makefile only regenerates `soc.v` when `soc.py`/`build_soc.py` change; `make clean` to force.
-- `TOP_MODULE` in the Makefile must match `--build-name` (the Makefile does not pass `--build-name`).
-- There is no pytest suite; "testing" = `make lint` + `make simulate`. The C++ harness only drives
-  stimulus for 4000 cycles and prints PASS — it has no assertions. Optional Yosys smoke test:
+- Core parameters are Makefile vars forwarded to `simple-soc`: `CLK_FREQ` (default 50000000),
+  `BAUDRATE` (115200), `BUILD_NAME` (soc → also the top module name). A `.params` stamp forces
+  regeneration when they change. `simple-soc` rejects `clk_freq < 16 * baudrate`.
+- The testbenches are self-checking (non-zero exit on failure) and speak the UARTBone protocol over
+  `serial_rx`/`serial_tx`: cmd 0x01 write / 0x02 read, length, 32-bit big-endian **word** address
+  (byte_addr >> 2), big-endian data. CSR byte addresses are hard-coded from `csr.csv` (ctrl_scratch
+  0x804, analyzer_* at 0x0..) — update both TBs if the CSR map changes.
+- LiteScope gotcha: with no trigger condition loaded it triggers immediately, and `storage_done` is 1
+  while idle — the TBs load one match-all condition (`trigger_mem_write`) before arming.
+- **Icarus support is commented out in the Makefile (the user will fix it later).** `test/tb_soc.v` exists
+  but isn't wired in. Generated `always @(*)` blocks with default-then-override `<=` re-trigger each
+  other in Icarus: ILA mux ↔ storage FSM hangs when probe data is non-zero, and UARTBone ↔ wishbone2csr
+  runs ~100× slower. See its header. `vvp` buffers stdout when writing to files or pipes, so a killed
+  run shows no output.
+- Optional Yosys smoke test:
   `yosys -p "read_verilog build/virtual/gateware/soc.v; hierarchy -top soc; proc; opt; check"`.
-- Icarus Verilog was deliberately dropped (vvp is impractically slow with the 4096×165-bit ILA memory).
 
 ## Architecture
 
@@ -39,7 +48,8 @@ make clean              # rm -rf build
     `litex.build.sim.verilator.SimVerilatorToolchain.build`) only calls `get_verilog()` and writes
     a single flat `.v`; no toolchain runs.
   - `BaseSoC(SoCCore)` — `CRG` from `clk`/`rst` pins (must be set **before** `SoCCore.__init__`),
-    `cpu_type="None"`, no UART/timer, `add_uartbone(uart_name="serial")`, `LiteScopeAnalyzer`.
+    `cpu_type="None"`, no UART/timer, `add_uartbone(uart_name="serial")`, `LiteScopeAnalyzer`
+    (`samplerate=clk_freq`, so VCD timescales from `litescope_cli` are correct).
 - `src/litex_wb_litescope/build_soc.py` — `simple-soc` entry point; runs `Builder(...,
   compile_software=False, compile_gateware=False).build(run=False)`. `csr.csv` comes from Builder,
   `analyzer.csv` from `LiteScopeAnalyzer.do_exit`. Both are needed by host tools
@@ -52,5 +62,6 @@ make clean              # rm -rf build
 - Keep `ident=""` and `integrated_sram_size=0`: adding an identifier or SRAM/ROM introduces
   `.init`/`$readmem` file dependencies and breaks the "single self-contained file" property.
 - Changing `PINS` changes the IP's port list — update `test/tb_soc.cpp` (Verilator exposes signals
-  >64 bits as `uint32_t` word arrays, e.g. `probe3[0..3]`) and the README instantiation example.
+  >64 bits as `uint32_t` word arrays, e.g. `probe3[0..3]`; built with `--prefix Vdut`),
+  `test/tb_soc.v`, and the README instantiation example.
 - To target real FPGA hardware, swap `VirtualPlatform` for a `litex_boards` platform; SoC code stays.
