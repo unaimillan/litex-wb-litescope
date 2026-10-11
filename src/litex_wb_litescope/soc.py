@@ -24,6 +24,8 @@ from litescope import LiteScopeAnalyzer
 # Every top-level port of the generated Verilog IP comes from an entry here.
 # "direction" is informational only: migen infers the actual port direction
 # from the logic that drives/reads each pin.
+# ILA probes are sampled directly in the clk domain (no synchronizers): drive
+# them from logic synchronous to clk.
 
 PINS = {
     # System pins.
@@ -100,9 +102,9 @@ class VirtualPlatform(GenericPlatform):
 # SoC ----------------------------------------------------------------------------------------------
 
 class BaseSoC(SoCCore):
-    """CPU-less Wishbone-bus SoC: UARTBone + LiteScope ILA (+ minimal ctrl/sram)."""
+    """CPU-less Wishbone-bus SoC: UARTBone + LiteScope ILA (+ ctrl CSRs, no SRAM)."""
 
-    def __init__(self, platform, clk_freq=100e6, baudrate=115200,
+    def __init__(self, platform, clk_freq=50e6, baudrate=115200,
                  ila_probes=None, ila_depth=4096, analyzer_csv="analyzer.csv", **kwargs):
         # CRG: drive the sys clock/reset from the user clk/rst pins
         # (vendor-agnostic, with power-on reset).
@@ -129,4 +131,5 @@ class BaseSoC(SoCCore):
             groups       = {0: probes},
             depth        = ila_depth,
             clock_domain = "sys",
+            samplerate   = clk_freq,
             csr_csv      = analyzer_csv)

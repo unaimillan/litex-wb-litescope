@@ -16,9 +16,11 @@ def main():
     parser = argparse.ArgumentParser(description="Build LiteX UARTBone+LiteScope IP core.")
     parser.add_argument("--output-dir", default="build/virtual",   help="Output directory.")
     parser.add_argument("--build-name", default="soc",             help="Top module / IP name.")
-    parser.add_argument("--clk-freq",   type=float, default=100e6, help="System clock frequency (Hz).")
+    parser.add_argument("--clk-freq",   type=float, default=50e6,  help="System clock frequency (Hz).")
     parser.add_argument("--baudrate",   type=int,   default=115200, help="UARTBone baudrate.")
     args = parser.parse_args()
+    if args.clk_freq < 16 * args.baudrate:
+        parser.error(f"--clk-freq ({args.clk_freq:g} Hz) must be >= 16 x --baudrate ({args.baudrate}) for UARTBone to work.")
 
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
@@ -48,7 +50,10 @@ def main():
     print(f"[simple-soc]   Analyzer config: {os.path.join(output_dir, 'analyzer.csv')}")
     print("")
     print(f"[simple-soc] Instantiate '{args.build_name}' in your external Verilog project and connect:")
-    print("[simple-soc]   clk, rst, serial_tx, serial_rx, probe0, probe1, probe2, probe3")
+    ports = [f"{name}_{sub}" if "subsignals" in spec else name
+             for name, spec in PINS.items()
+             for sub in spec.get("subsignals", [None])]
+    print("[simple-soc]   " + ", ".join(ports))
 
 
 if __name__ == "__main__":
